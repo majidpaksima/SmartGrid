@@ -73,3 +73,33 @@ class TestGridBuilder:
             )
             assert len(buy_prices) == count
             assert len(sell_prices) == count
+
+    def test_initial_depth_stays_within_cap(self):
+        buy_depth, sell_depth = self.builder.calculate_initial_depths(
+            target_profit=10.0,
+            commission_per_position=0.14,
+            lot_size=0.01,
+            grid_step=1.0,
+            tick_size=0.01,
+            max_grid_count=10,
+        )
+        assert 1 <= buy_depth <= 10
+        assert 1 <= sell_depth <= 10
+
+    def test_build_orders_for_depth_uses_range(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0]
+        orders = self.builder.build_orders_for_depth(
+            symbol="XAUUSD",
+            magic=710001,
+            cycle_number=1,
+            lot_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            buy_depth=3,
+            sell_depth=2,
+            buy_start=2,
+            sell_start=1,
+        )
+        assert [o["grid_number"] for o in orders if o["direction"] == "BUY"] == [2, 3]
+        assert [o["grid_number"] for o in orders if o["direction"] == "SELL"] == [1, 2]

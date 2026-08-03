@@ -166,21 +166,95 @@ class CycleManager:
         )
         sc.calculated_grid_step = cal_step
         sc.effective_grid_step = eff_step
-        orders = self.grid_builder.build_orders(
-            sc.name, ctx.magic_number, sc.cycle_number,
-            ctx.grid_count, lot, buy_prices, sell_prices,
+        sc.buy_grid_prices = buy_prices
+        sc.sell_grid_prices = sell_prices
+        initial_buy_depth, initial_sell_depth = self.grid_builder.calculate_initial_depths(
+            ctx.target_profit,
+            ctx.commission_per_position,
+            lot,
+            eff_step,
+            tick_size,
+            ctx.grid_count,
         )
+        sc.grid_base_depth = max(initial_buy_depth, initial_sell_depth)
+        sc.planned_buy_depth = initial_buy_depth
+        sc.planned_sell_depth = initial_sell_depth
+        sc.placed_buy_depth = 0
+        sc.placed_sell_depth = 0
         if dry_run:
+            staged_orders = self.grid_builder.build_orders_for_depth(
+                sc.name,
+                ctx.magic_number,
+                sc.cycle_number,
+                lot,
+                buy_prices,
+                sell_prices,
+                initial_buy_depth,
+                initial_sell_depth,
+            )
             self.logger.info("DRY RUN: Grid orders ready", symbol=sc.name, cycle=sc.cycle_number,
-                             order_count=len(orders))
-            for o in orders:
+                             order_count=len(staged_orders), buy_depth=initial_buy_depth,
+                             sell_depth=initial_sell_depth)
+            for o in staged_orders:
                 self.logger.info("DRY RUN order", symbol=sc.name, type=o["direction"],
                                  price=f"{o['price']:.5f}", comment=o["comment"])
+            sc.placed_buy_depth = initial_buy_depth
+            sc.placed_sell_depth = initial_sell_depth
             sm.transition_to(SymbolState.GRID_ACTIVE)
-            sc.last_event = "Grid built (dry run)"
+            sc.last_event = f"Grid built (dry run): buy={initial_buy_depth}, sell={initial_sell_depth}"
             return
+        if not self._place_grid_depths(ctx, sc, initial_buy_depth, initial_sell_depth):
+            time.sleep(self.app_settings.restart_delay_seconds)
+            sm.transition_to(SymbolState.RESETTING)
+            sc.last_error = "Grid placement failed"
+            return
+        sc.last_event = f"Grid placed: buy={initial_buy_depth}, sell={initial_sell_depth}"
+        sm.transition_to(SymbolState.GRID_ACTIVE)
+        self.logger.info("Grid placement complete", symbol=sc.name, cycle=sc.cycle_number,
+                         buy_depth=initial_buy_depth, sell_depth=initial_sell_depth)
+
+    def _place_grid_depths(
+        self,
+        ctx: SymbolConfig,
+        sc: SymbolContext,
+        buy_depth: int,
+        sell_depth: int,
+        dry_run: bool = False,
+    ) -> bool:
+        if buy_depth < sc.placed_buy_depth or sell_depth < sc.placed_sell_depth:
+            return False
+        buy_depth = min(buy_depth, len(sc.buy_grid_prices), ctx.grid_count)
+        sell_depth = min(sell_depth, len(sc.sell_grid_prices), ctx.grid_count)
+
+        if dry_run:
+            sc.placed_buy_depth = max(sc.placed_buy_depth, buy_depth)
+            sc.placed_sell_depth = max(sc.placed_sell_depth, sell_depth)
+            return True
+
+        buy_orders = self.grid_builder.build_orders_for_depth(
+            sc.name,
+            ctx.magic_number,
+            sc.cycle_number,
+            sc.lot_size,
+            sc.buy_grid_prices,
+            sc.sell_grid_prices,
+            buy_depth,
+            0,
+            buy_start=sc.placed_buy_depth + 1,
+        )
+        sell_orders = self.grid_builder.build_orders_for_depth(
+            sc.name,
+            ctx.magic_number,
+            sc.cycle_number,
+            sc.lot_size,
+            sc.buy_grid_prices,
+            sc.sell_grid_prices,
+            0,
+            sell_depth,
+            sell_start=sc.placed_sell_depth + 1,
+        )
+        orders = buy_orders + sell_orders
         placed_tickets = []
-        all_ok = True
         for o in orders:
             result = self.order_service.send_pending_order_with_retry(
                 symbol=o["symbol"],
@@ -201,22 +275,14 @@ class CycleManager:
                 self.logger.error("Order placement failed", symbol=sc.name,
                                   comment=o["comment"], retcode=result.get("retcode"),
                                   error=result.get("error", ""))
-                all_ok = False
-                break
-        if not all_ok or len(placed_tickets) < len(orders):
-            self.logger.error("Partial grid placement", symbol=sc.name,
-                              placed=len(placed_tickets), expected=len(orders))
-            for t in placed_tickets:
-                self.order_service.remove_pending_order(t)
-            time.sleep(self.app_settings.restart_delay_seconds)
-            sm.transition_to(SymbolState.RESETTING)
-            sc.last_error = "Grid placement failed"
-            return
+                for t in placed_tickets:
+                    self.order_service.remove_pending_order(t)
+                return False
+
+        sc.placed_buy_depth = max(sc.placed_buy_depth, buy_depth)
+        sc.placed_sell_depth = max(sc.placed_sell_depth, sell_depth)
         sc.active_order_tickets = placed_tickets
-        sc.last_event = f"Grid placed: {len(placed_tickets)} orders"
-        sm.transition_to(SymbolState.GRID_ACTIVE)
-        self.logger.info("Grid placement complete", symbol=sc.name, cycle=sc.cycle_number,
-                         orders=len(placed_tickets))
+        return True
 
     def _handle_grid_active(self, ctx: SymbolConfig, sc: SymbolContext, sm: SymbolStateMachine, dry_run: bool):
         filled_orders = self._check_filled_orders(ctx, sc)
@@ -225,6 +291,7 @@ class CycleManager:
             self._update_exposure(ctx, sc)
             if sc.buy_count + sc.sell_count > 0:
                 self._try_set_basket_target(ctx, sc, dry_run)
+                self._grow_grid_depth_if_needed(ctx, sc, dry_run)
                 sm.transition_to(SymbolState.POSITIONS_ACTIVE)
                 sc.last_event = "Orders filling"
             if self._all_grids_filled(ctx, sc):
@@ -251,6 +318,7 @@ class CycleManager:
             sc.last_event = "Locked exposure"
             return
         self._try_set_basket_target(ctx, sc, dry_run)
+        self._grow_grid_depth_if_needed(ctx, sc, dry_run)
         sm.transition_to(SymbolState.TARGET_ACTIVE)
         sc.last_event = "Setting target"
 
@@ -274,6 +342,7 @@ class CycleManager:
             sc.last_event = "Locked exposure"
             return
         self._try_set_basket_target(ctx, sc, dry_run)
+        self._grow_grid_depth_if_needed(ctx, sc, dry_run)
 
     def _handle_locked_exposure(self, ctx: SymbolConfig, sc: SymbolContext, sm: SymbolStateMachine, dry_run: bool):
         previous_tickets = set(sc.active_position_tickets)
@@ -323,6 +392,13 @@ class CycleManager:
         sc.effective_grid_step = None
         sc.active_order_tickets = []
         sc.active_position_tickets = []
+        sc.buy_grid_prices = []
+        sc.sell_grid_prices = []
+        sc.grid_base_depth = 1
+        sc.planned_buy_depth = 0
+        sc.planned_sell_depth = 0
+        sc.placed_buy_depth = 0
+        sc.placed_sell_depth = 0
         sc.buy_count = 0
         sc.sell_count = 0
         sc.buy_volume = 0.0
@@ -343,6 +419,25 @@ class CycleManager:
             if not still_open:
                 filled += 1
         return filled
+
+    def _grow_grid_depth_if_needed(self, ctx: SymbolConfig, sc: SymbolContext, dry_run: bool):
+        positions = self._get_positions(ctx, sc)
+        if not positions:
+            return
+        buy_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_BUY)
+        sell_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_SELL)
+        buy_target = min(ctx.grid_count, max(sc.placed_buy_depth, buy_count))
+        sell_target = min(ctx.grid_count, max(sc.placed_sell_depth, sell_count))
+
+        # Keep a small buffer on the dominant side, but never exceed the final cap.
+        if buy_count > sell_count:
+            buy_target = min(ctx.grid_count, max(buy_target, buy_count + 1))
+        elif sell_count > buy_count:
+            sell_target = min(ctx.grid_count, max(sell_target, sell_count + 1))
+
+        if buy_target == sc.placed_buy_depth and sell_target == sc.placed_sell_depth:
+            return
+        self._place_grid_depths(ctx, sc, buy_target, sell_target, dry_run=dry_run)
 
     def _refresh_state_from_mt5(self, ctx: SymbolConfig, sc: SymbolContext):
         orders = self.order_service.get_open_orders(sc.name, ctx.magic_number)
@@ -472,5 +567,3 @@ class CycleManager:
                 self.logger.warning(f"Failed to set basket {label}", ticket=ticket, retcode=rc)
         except Exception as e:
             self.logger.error(f"Exception setting basket {label}", error=str(e))
-
-

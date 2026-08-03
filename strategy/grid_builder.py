@@ -81,6 +81,82 @@ class GridBuilder:
             })
         return orders
 
+    def build_orders_for_depth(
+        self,
+        symbol: str,
+        magic: int,
+        cycle_number: int,
+        lot_size: float,
+        buy_prices: List[float],
+        sell_prices: List[float],
+        buy_depth: int,
+        sell_depth: int,
+        buy_start: int = 1,
+        sell_start: int = 1,
+    ) -> List[dict]:
+        orders = []
+        for j in range(max(1, buy_start), min(buy_depth, len(buy_prices)) + 1):
+            price = buy_prices[j - 1]
+            comment = f"C{cycle_number}_{j}"
+            orders.append({
+                "symbol": symbol,
+                "type": 4,
+                "volume": lot_size,
+                "price": price,
+                "magic": magic,
+                "comment": comment,
+                "grid_number": j,
+                "cycle_number": cycle_number,
+                "direction": "BUY",
+            })
+        for j in range(max(1, sell_start), min(sell_depth, len(sell_prices)) + 1):
+            price = sell_prices[j - 1]
+            comment = f"C{cycle_number}_{j}"
+            orders.append({
+                "symbol": symbol,
+                "type": 5,
+                "volume": lot_size,
+                "price": price,
+                "magic": magic,
+                "comment": comment,
+                "grid_number": j,
+                "cycle_number": cycle_number,
+                "direction": "SELL",
+            })
+        return orders
+
+    def calculate_initial_depths(
+        self,
+        target_profit: float,
+        commission_per_position: float,
+        lot_size: float,
+        grid_step: float,
+        tick_size: float,
+        max_grid_count: int,
+        side_bias: int = 0,
+    ) -> Tuple[int, int]:
+        if max_grid_count <= 0:
+            return (0, 0)
+        if grid_step <= 0 or lot_size <= 0:
+            return (1, 1)
+
+        # Rough profit per one grid move for a single position.
+        move_value = abs(grid_step) * lot_size * 100
+        if move_value <= 0:
+            return (1, 1)
+
+        total_target = max(target_profit + commission_per_position, tick_size * 10)
+        estimated_positions = int(total_target / move_value) + 1
+        estimated_positions = max(1, min(max_grid_count, estimated_positions))
+
+        if side_bias > 0:
+            return (estimated_positions, 1)
+        if side_bias < 0:
+            return (1, estimated_positions)
+        first_side = max(1, estimated_positions // 2)
+        second_side = max(1, estimated_positions - first_side)
+        return (first_side, second_side)
+
     def parse_comment(self, comment: str) -> Optional[Tuple[int, int]]:
         try:
             if not comment or not comment.startswith("C"):

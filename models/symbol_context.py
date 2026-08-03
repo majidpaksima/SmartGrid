@@ -22,6 +22,13 @@ class SymbolContext:
     atr_period: int = 14
     active_order_tickets: list = field(default_factory=list)
     active_position_tickets: list = field(default_factory=list)
+    buy_grid_prices: list = field(default_factory=list)
+    sell_grid_prices: list = field(default_factory=list)
+    grid_base_depth: int = 1
+    planned_buy_depth: int = 0
+    planned_sell_depth: int = 0
+    placed_buy_depth: int = 0
+    placed_sell_depth: int = 0
     buy_count: int = 0
     sell_count: int = 0
     buy_volume: float = 0.0
