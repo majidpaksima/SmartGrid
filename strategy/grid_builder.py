@@ -1,3 +1,4 @@
+import math
 from typing import List, Tuple, Optional
 from utils.logger import Logger
 from utils.price import normalize_buy_stop_price, normalize_sell_stop_price
@@ -133,29 +134,63 @@ class GridBuilder:
         grid_step: float,
         tick_size: float,
         max_grid_count: int,
-        side_bias: int = 0,
     ) -> Tuple[int, int]:
+        depth = self._solve_needed_depth(
+            target_profit, commission_per_position, lot_size, grid_step,
+            tick_size, max_grid_count,
+        )
+        return (depth, depth)
+
+    def estimate_needed_depths(
+        self,
+        positions: List[dict],
+        target_profit: float,
+        commission_per_position: float,
+        lot_size: float,
+        grid_step: float,
+        tick_size: float,
+        max_grid_count: int,
+    ) -> Tuple[int, int]:
+        buy_count = sum(1 for p in positions if p["type"] == 4 or p["type"] == 0)
+        sell_count = sum(1 for p in positions if p["type"] == 5 or p["type"] == 1)
+        base = self._solve_needed_depth(
+            target_profit, commission_per_position, lot_size, grid_step,
+            tick_size, max_grid_count,
+        )
+        if buy_count > sell_count:
+            buy_depth = min(max_grid_count, max(base + sell_count, buy_count))
+            sell_depth = min(max_grid_count, max(base, sell_count))
+        elif sell_count > buy_count:
+            sell_depth = min(max_grid_count, max(base + buy_count, sell_count))
+            buy_depth = min(max_grid_count, max(base, buy_count))
+        else:
+            buy_depth = sell_depth = min(max_grid_count, base)
+        return (max(1, buy_depth), max(1, sell_depth))
+
+    def _solve_needed_depth(
+        self,
+        target_profit: float,
+        commission_per_position: float,
+        lot_size: float,
+        grid_step: float,
+        tick_size: float,
+        max_grid_count: int,
+    ) -> int:
         if max_grid_count <= 0:
-            return (0, 0)
+            return 0
         if grid_step <= 0 or lot_size <= 0:
-            return (1, 1)
-
-        # Rough profit per one grid move for a single position.
-        move_value = abs(grid_step) * lot_size * 100
-        if move_value <= 0:
-            return (1, 1)
-
-        total_target = max(target_profit + commission_per_position, tick_size * 10)
-        estimated_positions = int(total_target / move_value) + 1
-        estimated_positions = max(1, min(max_grid_count, estimated_positions))
-
-        if side_bias > 0:
-            return (estimated_positions, 1)
-        if side_bias < 0:
-            return (1, estimated_positions)
-        first_side = max(1, estimated_positions // 2)
-        second_side = max(1, estimated_positions - first_side)
-        return (first_side, second_side)
+            return 1
+        unit = abs(grid_step) * lot_size * 100
+        if unit <= 0:
+            return 1
+        gross = max(target_profit + commission_per_position, tick_size * 10)
+        ratio = gross / unit
+        depth = max(1, int((1 + math.sqrt(1 + 8 * ratio)) / 2))
+        while depth > 1 and (depth - 1) * (depth - 2) / 2.0 * unit >= gross:
+            depth -= 1
+        while depth * (depth - 1) / 2.0 * unit < gross:
+            depth += 1
+        return max(1, min(max_grid_count, depth))
 
     def parse_comment(self, comment: str) -> Optional[Tuple[int, int]]:
         try:

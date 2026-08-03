@@ -281,7 +281,8 @@ class CycleManager:
 
         sc.placed_buy_depth = max(sc.placed_buy_depth, buy_depth)
         sc.placed_sell_depth = max(sc.placed_sell_depth, sell_depth)
-        sc.active_order_tickets = placed_tickets
+        open_orders = self.order_service.get_open_orders(sc.name, ctx.magic_number)
+        sc.active_order_tickets = [o["ticket"] for o in open_orders]
         return True
 
     def _handle_grid_active(self, ctx: SymbolConfig, sc: SymbolContext, sm: SymbolStateMachine, dry_run: bool):
@@ -424,19 +425,17 @@ class CycleManager:
         positions = self._get_positions(ctx, sc)
         if not positions:
             return
-        buy_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_BUY)
-        sell_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_SELL)
-        if buy_count == 0 or sell_count == 0:
-            return
-        buy_target = min(ctx.grid_count, max(sc.placed_buy_depth, buy_count))
-        sell_target = min(ctx.grid_count, max(sc.placed_sell_depth, sell_count))
-
-        # Keep a small buffer on the dominant side, but never exceed the final cap.
-        if buy_count > sell_count:
-            buy_target = min(ctx.grid_count, max(buy_target, buy_count + 1))
-        elif sell_count > buy_count:
-            sell_target = min(ctx.grid_count, max(sell_target, sell_count + 1))
-
+        buy_target, sell_target = self.grid_builder.estimate_needed_depths(
+            positions,
+            ctx.target_profit,
+            ctx.commission_per_position,
+            sc.lot_size,
+            sc.effective_grid_step,
+            sc.tick_size,
+            ctx.grid_count,
+        )
+        buy_target = min(ctx.grid_count, max(buy_target, sc.placed_buy_depth))
+        sell_target = min(ctx.grid_count, max(sell_target, sc.placed_sell_depth))
         if buy_target == sc.placed_buy_depth and sell_target == sc.placed_sell_depth:
             return
         self._place_grid_depths(ctx, sc, buy_target, sell_target, dry_run=dry_run)
