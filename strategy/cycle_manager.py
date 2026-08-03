@@ -159,6 +159,7 @@ class CycleManager:
         sc.volume_min = volume_min
         sc.volume_max = volume_max
         sc.volume_step = volume_step
+        sc.contract_size = symbol_info.get("trade_contract_size") or 100
         lot = normalize_volume(ctx.lot_size, volume_min, volume_max, volume_step)
         sc.lot_size = lot
         cal_step, eff_step, buy_prices, sell_prices = self.grid_builder.build_grid_prices(
@@ -172,8 +173,10 @@ class CycleManager:
             ctx.target_profit,
             ctx.commission_per_position,
             lot,
-            eff_step,
-            tick_size,
+            buy_prices,
+            sell_prices,
+            sc.anchor_price,
+            sc.contract_size,
             ctx.grid_count,
         )
         sc.grid_base_depth = max(initial_buy_depth, initial_sell_depth)
@@ -430,8 +433,10 @@ class CycleManager:
             ctx.target_profit,
             ctx.commission_per_position,
             sc.lot_size,
-            sc.effective_grid_step,
-            sc.tick_size,
+            sc.buy_grid_prices,
+            sc.sell_grid_prices,
+            sc.anchor_price,
+            sc.contract_size,
             ctx.grid_count,
         )
         buy_target = min(ctx.grid_count, max(buy_target, sc.placed_buy_depth))

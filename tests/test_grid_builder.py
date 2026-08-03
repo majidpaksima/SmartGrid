@@ -75,12 +75,16 @@ class TestGridBuilder:
             assert len(sell_prices) == count
 
     def test_initial_depth_stays_within_cap(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
         buy_depth, sell_depth = self.builder.calculate_initial_depths(
             target_profit=10.0,
             commission_per_position=0.14,
             lot_size=0.01,
-            grid_step=1.0,
-            tick_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            anchor_price=4000.0,
+            contract_size=100,
             max_grid_count=10,
         )
         assert 1 <= buy_depth <= 10
@@ -88,36 +92,45 @@ class TestGridBuilder:
         assert buy_depth == sell_depth
 
     def test_initial_depth_scales_with_target(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
         low = self.builder.calculate_initial_depths(
             target_profit=2.0, commission_per_position=0.0, lot_size=0.01,
-            grid_step=1.0, tick_size=0.01, max_grid_count=10,
+            buy_prices=buy_prices, sell_prices=sell_prices,
+            anchor_price=4000.0, contract_size=100, max_grid_count=10,
         )
         high = self.builder.calculate_initial_depths(
             target_profit=50.0, commission_per_position=0.0, lot_size=0.01,
-            grid_step=1.0, tick_size=0.01, max_grid_count=10,
+            buy_prices=buy_prices, sell_prices=sell_prices,
+            anchor_price=4000.0, contract_size=100, max_grid_count=10,
         )
         assert high[0] >= low[0]
 
-    def test_needed_depth_solves_quadratic(self):
-        # For one-directional 0.01 lot on XAUUSD, grid step 1.0:
-        # profit at level N after a move is sum_{k=1}^{N} k*1*0.01*100 = N(N+1)/2
+    def test_needed_depth_solves_with_grid_prices(self):
+        # Buy grid every 1.0: profit at level k = sum_{j=1}^{k} (k-j)*1*0.01*100
+        # = k(k-1)/2.  For target 10, need k(k-1)/2 >= 10 -> k=6 (15).
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0, 4006.0]
         depth = self.builder._solve_needed_depth(
             target_profit=10.0, commission_per_position=0.0,
-            lot_size=0.01, grid_step=1.0, tick_size=0.01, max_grid_count=10,
+            lot_size=0.01, prices=buy_prices, anchor_price=4000.0,
+            contract_size=100, max_grid_count=10,
         )
         for k in range(1, depth):
-            assert k * (k + 1) / 2.0 * 1.0 < 10.0 + 1e-9
-        assert depth * (depth + 1) / 2.0 * 1.0 >= 10.0 - 1e-9
+            assert k * (k - 1) / 2.0 * 1.0 < 10.0 + 1e-9
+        assert depth * (depth - 1) / 2.0 * 1.0 >= 10.0 - 1e-9
         assert 1 <= depth <= 10
 
     def test_needed_depth_uses_commission(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0, 4006.0]
         with_comm = self.builder._solve_needed_depth(
             target_profit=10.0, commission_per_position=0.14,
-            lot_size=0.01, grid_step=1.0, tick_size=0.01, max_grid_count=10,
+            lot_size=0.01, prices=buy_prices, anchor_price=4000.0,
+            contract_size=100, max_grid_count=10,
         )
         without_comm = self.builder._solve_needed_depth(
             target_profit=10.0, commission_per_position=0.0,
-            lot_size=0.01, grid_step=1.0, tick_size=0.01, max_grid_count=10,
+            lot_size=0.01, prices=buy_prices, anchor_price=4000.0,
+            contract_size=100, max_grid_count=10,
         )
         assert with_comm >= without_comm
 
@@ -128,13 +141,17 @@ class TestGridBuilder:
             {"type": 0, "volume": 0.01, "ticket": 3, "time": 3},
             {"type": 1, "volume": 0.01, "ticket": 4, "time": 4},
         ]
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
         buy_depth, sell_depth = self.builder.estimate_needed_depths(
             positions,
             target_profit=10.0,
             commission_per_position=0.14,
             lot_size=0.01,
-            grid_step=1.0,
-            tick_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            anchor_price=4000.0,
+            contract_size=100,
             max_grid_count=10,
         )
         # 3 buy + 1 sell: buy side must carry more depth than sell side.

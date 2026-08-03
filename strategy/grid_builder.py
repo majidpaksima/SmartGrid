@@ -1,4 +1,3 @@
-import math
 from typing import List, Tuple, Optional
 from utils.logger import Logger
 from utils.price import normalize_buy_stop_price, normalize_sell_stop_price
@@ -131,15 +130,21 @@ class GridBuilder:
         target_profit: float,
         commission_per_position: float,
         lot_size: float,
-        grid_step: float,
-        tick_size: float,
+        buy_prices: List[float],
+        sell_prices: List[float],
+        anchor_price: float,
+        contract_size: float,
         max_grid_count: int,
     ) -> Tuple[int, int]:
-        depth = self._solve_needed_depth(
-            target_profit, commission_per_position, lot_size, grid_step,
-            tick_size, max_grid_count,
+        buy_depth = self._solve_needed_depth(
+            target_profit, commission_per_position, lot_size,
+            buy_prices, anchor_price, contract_size, max_grid_count,
         )
-        return (depth, depth)
+        sell_depth = self._solve_needed_depth(
+            target_profit, commission_per_position, lot_size,
+            sell_prices, anchor_price, contract_size, max_grid_count,
+        )
+        return (max(1, buy_depth), max(1, sell_depth))
 
     def estimate_needed_depths(
         self,
@@ -147,15 +152,17 @@ class GridBuilder:
         target_profit: float,
         commission_per_position: float,
         lot_size: float,
-        grid_step: float,
-        tick_size: float,
+        buy_prices: List[float],
+        sell_prices: List[float],
+        anchor_price: float,
+        contract_size: float,
         max_grid_count: int,
     ) -> Tuple[int, int]:
         buy_count = sum(1 for p in positions if p["type"] == 4 or p["type"] == 0)
         sell_count = sum(1 for p in positions if p["type"] == 5 or p["type"] == 1)
         base = self._solve_needed_depth(
-            target_profit, commission_per_position, lot_size, grid_step,
-            tick_size, max_grid_count,
+            target_profit, commission_per_position, lot_size,
+            buy_prices, anchor_price, contract_size, max_grid_count,
         )
         if buy_count > sell_count:
             buy_depth = min(max_grid_count, max(base + sell_count, buy_count))
@@ -172,25 +179,36 @@ class GridBuilder:
         target_profit: float,
         commission_per_position: float,
         lot_size: float,
-        grid_step: float,
-        tick_size: float,
+        prices: List[float],
+        anchor_price: float,
+        contract_size: float,
         max_grid_count: int,
     ) -> int:
         if max_grid_count <= 0:
             return 0
-        if grid_step <= 0 or lot_size <= 0:
+        if not prices or lot_size <= 0:
             return 1
-        unit = abs(grid_step) * lot_size * 100
-        if unit <= 0:
-            return 1
-        gross = max(target_profit + commission_per_position, tick_size * 10)
-        ratio = gross / unit
-        depth = max(1, int((1 + math.sqrt(1 + 8 * ratio)) / 2))
-        while depth > 1 and (depth - 1) * (depth - 2) / 2.0 * unit >= gross:
-            depth -= 1
-        while depth * (depth - 1) / 2.0 * unit < gross:
-            depth += 1
-        return max(1, min(max_grid_count, depth))
+        gross = max(target_profit + commission_per_position, 0.0)
+        best_depth = max_grid_count
+        found = False
+        # Simulate price reaching level k: each opened level j (<= k) earns
+        # (price_k - price_j) * lot * contract for buys; for sells it is inverted.
+        for k in range(1, min(len(prices), max_grid_count) + 1):
+            reach_price = prices[k - 1]
+            total = 0.0
+            for j in range(1, k + 1):
+                entry = prices[j - 1]
+                if anchor_price <= reach_price:
+                    total += (reach_price - entry) * lot_size * contract_size
+                else:
+                    total += (entry - reach_price) * lot_size * contract_size
+            if total >= gross:
+                best_depth = k
+                found = True
+                break
+        if not found:
+            return max_grid_count
+        return max(1, best_depth)
 
     def parse_comment(self, comment: str) -> Optional[Tuple[int, int]]:
         try:

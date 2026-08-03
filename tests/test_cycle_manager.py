@@ -113,6 +113,10 @@ class TestCycleManager:
         sc.lot_size = 0.01
         sc.tick_size = 0.01
         sc.effective_grid_step = 1.0
+        sc.anchor_price = 4000.0
+        sc.contract_size = 100
+        sc.buy_grid_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0, 4006.0, 4007.0, 4008.0, 4009.0, 4010.0]
+        sc.sell_grid_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0, 3994.0, 3993.0, 3992.0, 3991.0, 3990.0]
         sc.placed_buy_depth = 2
         sc.placed_sell_depth = 2
         cycle_manager.position_service.get_open_positions.return_value = [
