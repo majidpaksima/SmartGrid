@@ -1,0 +1,45 @@
+application:
+  polling_interval_seconds: 0.25
+  dashboard_refresh_seconds: 1.0
+  restart_delay_seconds: 2.0
+  close_retry_count: 5
+  order_retry_count: 3
+  history_lookback_days: 7
+  dry_run: false
+  console_mode: rich
+  log_level: INFO
+  shutdown_mode: leave_open
+
+mt5:
+  terminal_path: null
+  login: null
+  server: null
+  deviation_points: 20
+  request_timeout_seconds: 10
+
+symbols:
+  - name: XAUUSD
+    enabled: true
+    grid_count: 5
+    lot_size: 0.01
+    atr_timeframe: M5
+    atr_period: 14
+    atr_filter_enabled: true
+    atr_lookback: 200
+    atr_slope_period: 5
+    commission_per_position: 0.14
+    target_profit: 10.0
+    magic_number: 710001
+
+  - name: EURUSD
+    enabled: true
+    grid_count: 5
+    lot_size: 0.01
+    atr_timeframe: M5
+    atr_period: 14
+    atr_filter_enabled: true
+    atr_lookback: 200
+    atr_slope_period: 5
+    commission_per_position: 0.0
+    target_profit: 5.0
+    magic_number: 710002
