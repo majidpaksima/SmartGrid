@@ -426,6 +426,8 @@ class CycleManager:
             return
         buy_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_BUY)
         sell_count = sum(1 for p in positions if p["type"] == MT5_ORDER_TYPE_SELL)
+        if buy_count == 0 or sell_count == 0:
+            return
         buy_target = min(ctx.grid_count, max(sc.placed_buy_depth, buy_count))
         sell_target = min(ctx.grid_count, max(sc.placed_sell_depth, sell_count))
 

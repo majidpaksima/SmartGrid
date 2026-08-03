@@ -106,3 +106,16 @@ class TestCycleManager:
         ]
         trigger = basket.select_trigger_position(positions)
         assert trigger is None
+
+    def test_grow_grid_depth_requires_both_sides(self, cycle_manager):
+        ctx = SymbolConfig(name="XAUUSD", magic_number=710001, grid_count=10)
+        sc = SymbolContext(name="XAUUSD", magic_number=710001)
+        sc.placed_buy_depth = 2
+        sc.placed_sell_depth = 2
+        cycle_manager.position_service.get_open_positions.return_value = [
+            {"type": 0, "volume": 0.01, "ticket": 1, "time": 1, "price_open": 4001.0, "profit": 0.0},
+            {"type": 0, "volume": 0.01, "ticket": 2, "time": 2, "price_open": 4002.0, "profit": 0.0},
+        ]
+        cycle_manager._grow_grid_depth_if_needed(ctx, sc, dry_run=True)
+        assert sc.placed_buy_depth == 2
+        assert sc.placed_sell_depth == 2
