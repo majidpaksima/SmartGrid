@@ -19,6 +19,7 @@ class Logger:
         self._initialized = True
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.text_log_path = self.log_dir / "grid_decisions.txt"
         self.logger = logging.getLogger("SmartGridBot")
         self.logger.setLevel(getattr(logging, level.upper(), logging.INFO))
         self.logger.handlers.clear()
@@ -70,3 +71,8 @@ class Logger:
         self.logger.critical(msg)
         if Logger._console_enabled:
             print(f"[CRITICAL] {msg}")
+
+    def text(self, message: str = "", **fields):
+        msg = self._format(**fields) if fields else message
+        with self.text_log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")

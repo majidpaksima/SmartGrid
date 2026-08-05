@@ -95,6 +95,8 @@ class OrderService:
         magic: int,
         comment: str,
         max_attempts: int = 3,
+        sl: float = 0.0,
+        tp: float = 0.0,
     ) -> dict:
         filling_modes = [None, MT5_ORDER_FILLING_RETURN, MT5_ORDER_FILLING_FOK]
         for attempt in range(max_attempts):
@@ -110,8 +112,8 @@ class OrderService:
                 "volume": volume,
                 "type": order_type,
                 "price": price,
-                "sl": 0.0,
-                "tp": 0.0,
+                "sl": sl if sl else 0.0,
+                "tp": tp if tp else 0.0,
                 "deviation": self.deviation_points,
                 "magic": magic,
                 "comment": comment,

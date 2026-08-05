@@ -51,6 +51,7 @@ class GridBuilder:
         lot_size: float,
         buy_prices: List[float],
         sell_prices: List[float],
+        grid_step: float = 0.0,
     ) -> List[dict]:
         orders = []
         for j, price in enumerate(buy_prices, 1):
@@ -60,6 +61,7 @@ class GridBuilder:
                 "type": 4,
                 "volume": lot_size,
                 "price": price,
+                "tp": price + grid_step if grid_step > 0 else 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -73,6 +75,7 @@ class GridBuilder:
                 "type": 5,
                 "volume": lot_size,
                 "price": price,
+                "tp": price - grid_step if grid_step > 0 else 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -93,6 +96,7 @@ class GridBuilder:
         sell_depth: int,
         buy_start: int = 1,
         sell_start: int = 1,
+        grid_step: float = 0.0,
     ) -> List[dict]:
         orders = []
         for j in range(max(1, buy_start), min(buy_depth, len(buy_prices)) + 1):
@@ -103,6 +107,7 @@ class GridBuilder:
                 "type": 4,
                 "volume": lot_size,
                 "price": price,
+                "tp": price + grid_step if grid_step > 0 else 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -117,6 +122,7 @@ class GridBuilder:
                 "type": 5,
                 "volume": lot_size,
                 "price": price,
+                "tp": price - grid_step if grid_step > 0 else 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -144,7 +150,11 @@ class GridBuilder:
             target_profit, commission_per_position, lot_size,
             sell_prices, anchor_price, contract_size, max_grid_count,
         )
-        return (max(1, buy_depth), max(1, sell_depth))
+        # Plant one grid level beyond the target crossing so the basket
+        # take-profit always sits inside the planted grid range.
+        buy_depth = min(max_grid_count, max(1, buy_depth) + 1)
+        sell_depth = min(max_grid_count, max(1, sell_depth) + 1)
+        return (buy_depth, sell_depth)
 
     def estimate_needed_depths(
         self,
@@ -157,21 +167,37 @@ class GridBuilder:
         anchor_price: float,
         contract_size: float,
         max_grid_count: int,
+        placed_buy_depth: int,
+        placed_sell_depth: int,
     ) -> Tuple[int, int]:
         buy_count = sum(1 for p in positions if p["type"] == 4 or p["type"] == 0)
         sell_count = sum(1 for p in positions if p["type"] == 5 or p["type"] == 1)
-        base = self._solve_needed_depth(
+        buy_base = self._solve_needed_depth(
             target_profit, commission_per_position, lot_size,
             buy_prices, anchor_price, contract_size, max_grid_count,
         )
+        sell_base = self._solve_needed_depth(
+            target_profit, commission_per_position, lot_size,
+            sell_prices, anchor_price, contract_size, max_grid_count,
+        )
         if buy_count > sell_count:
-            buy_depth = min(max_grid_count, max(base + sell_count, buy_count))
-            sell_depth = min(max_grid_count, max(base, sell_count))
+            # Buy-dominant: extend the buy grid to keep one level beyond the
+            # target crossing and compensate for the sell positions already
+            # hedging the basket (they add commission without net profit).
+            buy_depth = min(
+                max_grid_count,
+                max(placed_buy_depth, buy_count, buy_base + 1, buy_base + sell_count),
+            )
+            sell_depth = max(1, placed_sell_depth)
         elif sell_count > buy_count:
-            sell_depth = min(max_grid_count, max(base + buy_count, sell_count))
-            buy_depth = min(max_grid_count, max(base, buy_count))
+            sell_depth = min(
+                max_grid_count,
+                max(placed_sell_depth, sell_count, sell_base + 1, sell_base + buy_count),
+            )
+            buy_depth = max(1, placed_buy_depth)
         else:
-            buy_depth = sell_depth = min(max_grid_count, base)
+            buy_depth = min(max_grid_count, max(placed_buy_depth, buy_count, buy_base + 1))
+            sell_depth = min(max_grid_count, max(placed_sell_depth, sell_count, sell_base + 1))
         return (max(1, buy_depth), max(1, sell_depth))
 
     def _solve_needed_depth(

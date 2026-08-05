@@ -17,6 +17,7 @@ class TargetCalculator:
         symbol: str,
         tick_size: float,
         current_price: float,
+        contract_size: float = 100,
     ) -> Optional[float]:
         if not positions:
             return None
@@ -30,12 +31,12 @@ class TargetCalculator:
         mt5_usable = self._check_mt5_usable()
         if mt5_usable:
             direction = 1 if net_volume > 0 else -1
-            lower, upper = self._find_bracket(positions, gross_target, symbol, current_price, direction, tick_size)
+            lower, upper = self._find_bracket(positions, gross_target, symbol, current_price, direction, tick_size, contract_size)
             if lower is not None and upper is not None:
-                target = self._bisect_target(positions, gross_target, symbol, lower, upper, tick_size)
+                target = self._bisect_target(positions, gross_target, symbol, lower, upper, tick_size, contract_size)
                 if target is not None:
-                    return self._adjust_target(positions, gross_target, symbol, target, tick_size, direction)
-        return self._estimate_target_simple(positions, gross_target, net_volume, current_price, tick_size)
+                    return self._adjust_target(positions, gross_target, symbol, target, tick_size, direction, contract_size)
+        return self._estimate_target_simple(positions, gross_target, net_volume, current_price, tick_size, contract_size)
 
     def _check_mt5_usable(self) -> bool:
         try:
@@ -45,7 +46,8 @@ class TargetCalculator:
         except Exception:
             return False
 
-    def _profit_at_price(self, positions: List[dict], close_price: float, symbol: str) -> float:
+    def _profit_at_price(self, positions: List[dict], close_price: float, symbol: str,
+                         contract_size: float = 100) -> float:
         try:
             import MetaTrader5 as mt5
             total = 0.0
@@ -56,10 +58,10 @@ class TargetCalculator:
                 if profit is not None:
                     total += profit
             if total == 0.0 and len(positions) > 0:
-                return self._estimate_profit_simple(positions, close_price)
+                return self._estimate_profit_simple(positions, close_price, contract_size)
             return total
         except Exception:
-            return self._estimate_profit_simple(positions, close_price)
+            return self._estimate_profit_simple(positions, close_price, contract_size)
 
     def _find_bracket(
         self,
@@ -69,6 +71,7 @@ class TargetCalculator:
         start_price: float,
         direction: int,
         tick_size: float,
+        contract_size: float = 100,
     ) -> Tuple[Optional[float], Optional[float]]:
         step = tick_size * 100
         max_steps = 100000
@@ -79,8 +82,8 @@ class TargetCalculator:
                 high = start_price + step
             else:
                 low = start_price - step
-            profit_low = self._profit_at_price(positions, low, symbol)
-            profit_high = self._profit_at_price(positions, high, symbol)
+            profit_low = self._profit_at_price(positions, low, symbol, contract_size)
+            profit_high = self._profit_at_price(positions, high, symbol, contract_size)
             f_low = profit_low - gross_target
             f_high = profit_high - gross_target
             if f_low * f_high <= 0:
@@ -98,15 +101,16 @@ class TargetCalculator:
         lower: float,
         upper: float,
         tick_size: float,
+        contract_size: float = 100,
         max_iter: int = 200,
     ) -> Optional[float]:
         for _ in range(max_iter):
             mid = (lower + upper) / 2.0
-            profit_mid = self._profit_at_price(positions, mid, symbol)
+            profit_mid = self._profit_at_price(positions, mid, symbol, contract_size)
             f_mid = profit_mid - gross_target
             if abs(f_mid) < 1e-10 or (upper - lower) < tick_size * 0.1:
                 return mid
-            profit_low = self._profit_at_price(positions, lower, symbol)
+            profit_low = self._profit_at_price(positions, lower, symbol, contract_size)
             f_low = profit_low - gross_target
             if f_low * f_mid <= 0:
                 upper = mid
@@ -122,20 +126,22 @@ class TargetCalculator:
         target: float,
         tick_size: float,
         direction: int,
+        contract_size: float = 100,
     ) -> float:
         adj_target = round(target / tick_size) * tick_size
-        profit = self._profit_at_price(positions, adj_target, symbol)
+        profit = self._profit_at_price(positions, adj_target, symbol, contract_size)
         if profit < gross_target:
             adj_target += tick_size * direction
         return adj_target
 
-    def _estimate_profit_simple(self, positions: List[dict], close_price: float) -> float:
+    def _estimate_profit_simple(self, positions: List[dict], close_price: float,
+                                contract_size: float = 100) -> float:
         total = 0.0
         for p in positions:
             if p["type"] == MT5_ORDER_TYPE_BUY:
-                total += (close_price - p["price_open"]) * p["volume"] * 100
+                total += (close_price - p["price_open"]) * p["volume"] * contract_size
             else:
-                total += (p["price_open"] - close_price) * p["volume"] * 100
+                total += (p["price_open"] - close_price) * p["volume"] * contract_size
         return total
 
     def _estimate_target_simple(
@@ -145,10 +151,13 @@ class TargetCalculator:
         net_volume: float,
         current_price: float,
         tick_size: float,
+        contract_size: float = 100,
     ) -> Optional[float]:
         if net_volume == 0:
             return None
-        price_move = gross_target / abs(net_volume * 100)
+        if contract_size <= 0:
+            contract_size = 100
+        price_move = gross_target / abs(net_volume * contract_size)
         direction = 1 if net_volume > 0 else -1
         target = current_price + price_move * direction
         target = round(target / tick_size) * tick_size

@@ -339,7 +339,7 @@ class SmartGridBot:
     def _shutdown(self):
         self.logger.info("Bot shutting down")
         try:
-            results = self.persistence.get_all_cycle_records() if hasattr(self, 'persistence') else []
+            results = self.persistence.get_all_cycles() if hasattr(self, 'persistence') else []
             if results:
                 total_gross = sum(r.gross_profit or 0.0 for r in results)
                 total_net = sum(r.net_profit or 0.0 for r in results)

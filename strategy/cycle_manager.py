@@ -184,6 +184,15 @@ class CycleManager:
         sc.planned_sell_depth = initial_sell_depth
         sc.placed_buy_depth = 0
         sc.placed_sell_depth = 0
+        self.logger.text(
+            "grid_initial_plan",
+            symbol=sc.name,
+            cycle=sc.cycle_number,
+            buy_depth=initial_buy_depth,
+            sell_depth=initial_sell_depth,
+            grid_count=ctx.grid_count,
+            target_profit=ctx.target_profit,
+        )
         if dry_run:
             staged_orders = self.grid_builder.build_orders_for_depth(
                 sc.name,
@@ -194,13 +203,15 @@ class CycleManager:
                 sell_prices,
                 initial_buy_depth,
                 initial_sell_depth,
+                grid_step=eff_step or sc.tick_size,
             )
             self.logger.info("DRY RUN: Grid orders ready", symbol=sc.name, cycle=sc.cycle_number,
                              order_count=len(staged_orders), buy_depth=initial_buy_depth,
                              sell_depth=initial_sell_depth)
             for o in staged_orders:
                 self.logger.info("DRY RUN order", symbol=sc.name, type=o["direction"],
-                                 price=f"{o['price']:.5f}", comment=o["comment"])
+                                 price=f"{o['price']:.5f}", tp=f"{o['tp']:.5f}" if o.get("tp") else None,
+                                 comment=o["comment"])
             sc.placed_buy_depth = initial_buy_depth
             sc.placed_sell_depth = initial_sell_depth
             sm.transition_to(SymbolState.GRID_ACTIVE)
@@ -244,6 +255,7 @@ class CycleManager:
             buy_depth,
             0,
             buy_start=sc.placed_buy_depth + 1,
+            grid_step=sc.effective_grid_step or sc.tick_size,
         )
         sell_orders = self.grid_builder.build_orders_for_depth(
             sc.name,
@@ -255,6 +267,7 @@ class CycleManager:
             0,
             sell_depth,
             sell_start=sc.placed_sell_depth + 1,
+            grid_step=sc.effective_grid_step or sc.tick_size,
         )
         orders = buy_orders + sell_orders
         placed_tickets = []
@@ -267,13 +280,14 @@ class CycleManager:
                 magic=o["magic"],
                 comment=o["comment"],
                 max_attempts=self.app_settings.order_retry_count,
+                tp=o.get("tp", 0.0) or 0.0,
             )
             if result.get("retcode") in (MT5_RETCODE_PLACED, MT5_RETCODE_DONE, MT5_RETCODE_DONE_PARTIAL):
                 ticket = result.get("order", 0)
                 placed_tickets.append(ticket)
                 self.logger.info("Order placed", symbol=sc.name, ticket=ticket,
                                  retcode=result.get("retcode"), comment=o["comment"],
-                                 price=f"{o['price']:.5f}")
+                                 price=f"{o['price']:.5f}", tp=f"{o.get('tp', 0.0):.5f}" if o.get("tp") else None)
             else:
                 self.logger.error("Order placement failed", symbol=sc.name,
                                   comment=o["comment"], retcode=result.get("retcode"),
@@ -438,9 +452,23 @@ class CycleManager:
             sc.anchor_price,
             sc.contract_size,
             ctx.grid_count,
+            sc.placed_buy_depth,
+            sc.placed_sell_depth,
         )
         buy_target = min(ctx.grid_count, max(buy_target, sc.placed_buy_depth))
         sell_target = min(ctx.grid_count, max(sell_target, sc.placed_sell_depth))
+        self.logger.text(
+            "grid_growth_decision",
+            symbol=sc.name,
+            cycle=sc.cycle_number,
+            buy_count=sc.buy_count,
+            sell_count=sc.sell_count,
+            placed_buy_depth=sc.placed_buy_depth,
+            placed_sell_depth=sc.placed_sell_depth,
+            buy_target=buy_target,
+            sell_target=sell_target,
+            dominant_side="BUY" if sc.buy_count > sc.sell_count else "SELL" if sc.sell_count > sc.buy_count else "EQUAL",
+        )
         if buy_target == sc.placed_buy_depth and sell_target == sc.placed_sell_depth:
             return
         self._place_grid_depths(ctx, sc, buy_target, sell_target, dry_run=dry_run)
@@ -480,12 +508,13 @@ class CycleManager:
     def _close_all_positions(self, ctx: SymbolConfig, sc: SymbolContext):
         positions = self.position_service.get_open_positions(sc.name, ctx.magic_number)
         for p in positions:
-            tick = self.market_data.get_symbol_tick(sc.name)
-            if not tick:
-                continue
-            close_price = tick["bid"] if p["type"] == MT5_ORDER_TYPE_BUY else tick["ask"]
             retries = self.app_settings.close_retry_count
             for attempt in range(retries):
+                tick = self.market_data.get_symbol_tick(sc.name)
+                if not tick:
+                    time.sleep(0.5)
+                    continue
+                close_price = tick["bid"] if p["type"] == MT5_ORDER_TYPE_BUY else tick["ask"]
                 result = self.position_service.close_position(
                     p["ticket"], sc.name, p["type"], p["volume"], close_price
                 )
@@ -528,8 +557,10 @@ class CycleManager:
             sc.name,
             sc.tick_size,
             current_price,
+            contract_size=sc.contract_size,
         )
         if target is not None:
+            target = self._keep_target_on_grid(ctx, sc, target, dry_run)
             sc.target_price = target
             trigger = self.basket_manager.select_trigger_position(positions)
             if trigger:
@@ -537,6 +568,44 @@ class CycleManager:
             if not dry_run:
                 self._set_basket_targets(ctx, sc, positions, target)
             sc.last_event = f"Target set: {target:.5f}"
+
+    def _keep_target_on_grid(self, ctx: SymbolConfig, sc: SymbolContext,
+                             target: float, dry_run: bool) -> float:
+        """Grow the planted grid so the basket target never sits beyond it.
+
+        The dynamically computed target price can fall far outside the planted
+        grid when only a few positions are open. Here we extend the grid on the
+        dominant side to cover the target (up to grid_count) and clamp the final
+        TP to the last planted level so it stays reachable by the grid.
+        """
+        net_buy = sc.buy_volume > sc.sell_volume
+        if net_buy and sc.buy_grid_prices:
+            needed = len(sc.buy_grid_prices)
+            for j, p in enumerate(sc.buy_grid_prices, 1):
+                if p >= target:
+                    needed = j
+                    break
+            want = min(ctx.grid_count, needed + 1)
+            if want > sc.placed_buy_depth:
+                self._place_grid_depths(ctx, sc, want, sc.placed_sell_depth, dry_run=dry_run)
+            if sc.placed_buy_depth > 0:
+                last = sc.buy_grid_prices[min(sc.placed_buy_depth, len(sc.buy_grid_prices)) - 1]
+                if target > last:
+                    target = last
+        elif not net_buy and sc.sell_grid_prices:
+            needed = len(sc.sell_grid_prices)
+            for j, p in enumerate(sc.sell_grid_prices, 1):
+                if p <= target:
+                    needed = j
+                    break
+            want = min(ctx.grid_count, needed + 1)
+            if want > sc.placed_sell_depth:
+                self._place_grid_depths(ctx, sc, sc.placed_buy_depth, want, dry_run=dry_run)
+            if sc.placed_sell_depth > 0:
+                last = sc.sell_grid_prices[min(sc.placed_sell_depth, len(sc.sell_grid_prices)) - 1]
+                if target < last:
+                    target = last
+        return target
 
     def _set_basket_targets(self, ctx: SymbolConfig, sc: SymbolContext, positions: List[dict], target_price: float):
         try:
@@ -546,21 +615,44 @@ class CycleManager:
         buy_vol = sum(p["volume"] for p in positions if p["type"] == MT5_ORDER_TYPE_BUY)
         sell_vol = sum(p["volume"] for p in positions if p["type"] == MT5_ORDER_TYPE_SELL)
         net_buy = buy_vol > sell_vol
+        step = sc.effective_grid_step or sc.tick_size
         for p in positions:
             is_buy = p["type"] == MT5_ORDER_TYPE_BUY
             same_dir = (is_buy and net_buy) or (not is_buy and not net_buy)
+            entry = p.get("price_open", 0.0) or 0.0
             if same_dir:
+                # TP must never sit before the entry: keep it at least one
+                # grid step beyond the position even when the basket target
+                # falls behind it (e.g. a level opened beyond the planted depth).
+                if is_buy:
+                    eff = max(target_price, entry + step) if entry > 0 else target_price
+                else:
+                    eff = min(target_price, entry - step) if entry > 0 else target_price
+                eff = self._align_to_tick(eff, sc.tick_size)
                 current = p.get("tp", 0.0) or 0.0
-                if abs(current - target_price) >= sc.tick_size * 0.5:
+                if abs(current - eff) >= sc.tick_size * 0.5:
                     request = {"action": 6, "position": p["ticket"], "symbol": sc.name,
-                               "tp": target_price, "sl": p.get("sl", 0.0) or 0.0, "magic": ctx.magic_number}
-                    self._send_modify(request, p["ticket"], target_price, "TP")
+                               "tp": eff, "sl": p.get("sl", 0.0) or 0.0, "magic": ctx.magic_number}
+                    self._send_modify(request, p["ticket"], eff, "TP")
             else:
+                # Opposite-side hedge gets the basket target as SL, but never
+                # behind its own entry either.
+                if is_buy:
+                    eff = min(target_price, entry - step) if entry > 0 else target_price
+                else:
+                    eff = max(target_price, entry + step) if entry > 0 else target_price
+                eff = self._align_to_tick(eff, sc.tick_size)
                 current = p.get("sl", 0.0) or 0.0
-                if abs(current - target_price) >= sc.tick_size * 0.5:
+                if abs(current - eff) >= sc.tick_size * 0.5:
                     request = {"action": 6, "position": p["ticket"], "symbol": sc.name,
-                               "sl": target_price, "tp": p.get("tp", 0.0) or 0.0, "magic": ctx.magic_number}
-                    self._send_modify(request, p["ticket"], target_price, "SL")
+                               "sl": eff, "tp": p.get("tp", 0.0) or 0.0, "magic": ctx.magic_number}
+                    self._send_modify(request, p["ticket"], eff, "SL")
+
+    @staticmethod
+    def _align_to_tick(price: float, tick_size: float) -> float:
+        if tick_size > 0:
+            return round(price / tick_size) * tick_size
+        return price
 
     def _send_modify(self, request: dict, ticket: int, price: float, label: str):
         try:

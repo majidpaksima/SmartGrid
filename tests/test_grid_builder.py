@@ -91,6 +91,40 @@ class TestGridBuilder:
         assert 1 <= sell_depth <= 10
         assert buy_depth == sell_depth
 
+    def test_initial_depth_plants_one_beyond_crossing(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
+        buy_depth, sell_depth = self.builder.calculate_initial_depths(
+            target_profit=0.5,
+            commission_per_position=0.0,
+            lot_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            anchor_price=4000.0,
+            contract_size=100,
+            max_grid_count=10,
+        )
+        # Crossing level k=2 (cumulative profit 1.0 >= 0.5); the grid must
+        # plant one level beyond it so the TP sits inside the grid.
+        assert buy_depth == 3
+        assert sell_depth == 3
+
+    def test_initial_depth_one_beyond_capped_by_grid_count(self):
+        buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
+        sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
+        buy_depth, sell_depth = self.builder.calculate_initial_depths(
+            target_profit=500.0,
+            commission_per_position=0.0,
+            lot_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            anchor_price=4000.0,
+            contract_size=100,
+            max_grid_count=4,
+        )
+        assert buy_depth == 4
+        assert sell_depth == 4
+
     def test_initial_depth_scales_with_target(self):
         buy_prices = [4001.0, 4002.0, 4003.0, 4004.0, 4005.0]
         sell_prices = [3999.0, 3998.0, 3997.0, 3996.0, 3995.0]
@@ -153,9 +187,12 @@ class TestGridBuilder:
             anchor_price=4000.0,
             contract_size=100,
             max_grid_count=10,
+            placed_buy_depth=3,
+            placed_sell_depth=2,
         )
-        # 3 buy + 1 sell: buy side must carry more depth than sell side.
-        assert buy_depth >= sell_depth
+        # 3 buy + 1 sell: only the dominant side should grow.
+        assert buy_depth >= 3
+        assert sell_depth == 2
         assert buy_depth <= 10
         assert sell_depth <= 10
 
@@ -176,3 +213,42 @@ class TestGridBuilder:
         )
         assert [o["grid_number"] for o in orders if o["direction"] == "BUY"] == [2, 3]
         assert [o["grid_number"] for o in orders if o["direction"] == "SELL"] == [1, 2]
+
+    def test_build_orders_for_depth_includes_tp(self):
+        buy_prices = [4001.0, 4002.0, 4003.0]
+        sell_prices = [3999.0, 3998.0, 3997.0]
+        orders = self.builder.build_orders_for_depth(
+            symbol="XAUUSD",
+            magic=710001,
+            cycle_number=1,
+            lot_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            buy_depth=2,
+            sell_depth=2,
+            grid_step=1.0,
+        )
+        for o in orders:
+            if o["direction"] == "BUY":
+                assert abs(o["tp"] - (o["price"] + 1.0)) < 1e-9
+            else:
+                assert abs(o["tp"] - (o["price"] - 1.0)) < 1e-9
+
+    def test_build_orders_includes_tp(self):
+        buy_prices = [4001.0, 4002.0, 4003.0]
+        sell_prices = [3999.0, 3998.0, 3997.0]
+        orders = self.builder.build_orders(
+            symbol="XAUUSD",
+            magic=710001,
+            cycle_number=1,
+            grid_count=3,
+            lot_size=0.01,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            grid_step=1.0,
+        )
+        for o in orders:
+            if o["direction"] == "BUY":
+                assert abs(o["tp"] - (o["price"] + 1.0)) < 1e-9
+            else:
+                assert abs(o["tp"] - (o["price"] - 1.0)) < 1e-9
