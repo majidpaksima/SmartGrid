@@ -252,6 +252,7 @@ class SmartGridBot:
                         sm.transition_to(SymbolState.CLOSING)
                         sc.last_event = "Emergency close"
                     EMERGENCY_CLOSE_REQUESTED = False
+                    self.logger.info("Emergency close complete. All cycles transitioning to CLOSING state.")
                 connected = self.mt5_connection.ensure_connected()
                 if not connected:
                     self.logger.warning("MT5 connection lost, retrying...")

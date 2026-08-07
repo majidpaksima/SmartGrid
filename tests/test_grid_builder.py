@@ -190,11 +190,10 @@ class TestGridBuilder:
             placed_buy_depth=3,
             placed_sell_depth=2,
         )
-        # 3 buy + 1 sell: only the dominant side should grow.
+        # Both directions grow symmetrically to the same depth.
+        assert buy_depth == sell_depth
         assert buy_depth >= 3
-        assert sell_depth == 2
         assert buy_depth <= 10
-        assert sell_depth <= 10
 
     def test_build_orders_for_depth_uses_range(self):
         buy_prices = [4001.0, 4002.0, 4003.0, 4004.0]
@@ -214,7 +213,7 @@ class TestGridBuilder:
         assert [o["grid_number"] for o in orders if o["direction"] == "BUY"] == [2, 3]
         assert [o["grid_number"] for o in orders if o["direction"] == "SELL"] == [1, 2]
 
-    def test_build_orders_for_depth_includes_tp(self):
+    def test_build_orders_for_depth_has_no_tp(self):
         buy_prices = [4001.0, 4002.0, 4003.0]
         sell_prices = [3999.0, 3998.0, 3997.0]
         orders = self.builder.build_orders_for_depth(
@@ -229,12 +228,9 @@ class TestGridBuilder:
             grid_step=1.0,
         )
         for o in orders:
-            if o["direction"] == "BUY":
-                assert abs(o["tp"] - (o["price"] + 1.0)) < 1e-9
-            else:
-                assert abs(o["tp"] - (o["price"] - 1.0)) < 1e-9
+            assert o["tp"] == 0.0
 
-    def test_build_orders_includes_tp(self):
+    def test_build_orders_has_no_tp(self):
         buy_prices = [4001.0, 4002.0, 4003.0]
         sell_prices = [3999.0, 3998.0, 3997.0]
         orders = self.builder.build_orders(
@@ -248,7 +244,4 @@ class TestGridBuilder:
             grid_step=1.0,
         )
         for o in orders:
-            if o["direction"] == "BUY":
-                assert abs(o["tp"] - (o["price"] + 1.0)) < 1e-9
-            else:
-                assert abs(o["tp"] - (o["price"] - 1.0)) < 1e-9
+            assert o["tp"] == 0.0

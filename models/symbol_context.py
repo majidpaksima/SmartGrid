@@ -22,6 +22,7 @@ class SymbolContext:
     atr_period: int = 14
     active_order_tickets: list = field(default_factory=list)
     active_position_tickets: list = field(default_factory=list)
+    position_tickets_seen: set = field(default_factory=set)
     buy_grid_prices: list = field(default_factory=list)
     sell_grid_prices: list = field(default_factory=list)
     grid_base_depth: int = 1
@@ -35,6 +36,11 @@ class SymbolContext:
     sell_volume: float = 0.0
     target_price: Optional[float] = None
     trigger_ticket: Optional[int] = None
+    basket_target_locked: bool = False
+    basket_direction: Optional[int] = None
+    locked_position_tickets: set = field(default_factory=set)
+    settled_position_tickets: set = field(default_factory=set)
+    realized_net_profit: float = 0.0
     cycle_start_time: Optional[datetime] = None
     last_error: Optional[str] = None
     last_event: str = ""
@@ -48,3 +54,4 @@ class SymbolContext:
     trade_freeze_level: int = 0
     dry_run: bool = False
     atr_ok: bool = True
+    both_sides_full_closed: bool = False

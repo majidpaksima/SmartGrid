@@ -61,7 +61,7 @@ class GridBuilder:
                 "type": 4,
                 "volume": lot_size,
                 "price": price,
-                "tp": price + grid_step if grid_step > 0 else 0.0,
+                "tp": 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -75,7 +75,7 @@ class GridBuilder:
                 "type": 5,
                 "volume": lot_size,
                 "price": price,
-                "tp": price - grid_step if grid_step > 0 else 0.0,
+                "tp": 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -107,7 +107,7 @@ class GridBuilder:
                 "type": 4,
                 "volume": lot_size,
                 "price": price,
-                "tp": price + grid_step if grid_step > 0 else 0.0,
+                "tp": 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -122,7 +122,7 @@ class GridBuilder:
                 "type": 5,
                 "volume": lot_size,
                 "price": price,
-                "tp": price - grid_step if grid_step > 0 else 0.0,
+                "tp": 0.0,
                 "magic": magic,
                 "comment": comment,
                 "grid_number": j,
@@ -180,25 +180,21 @@ class GridBuilder:
             target_profit, commission_per_position, lot_size,
             sell_prices, anchor_price, contract_size, max_grid_count,
         )
-        if buy_count > sell_count:
-            # Buy-dominant: extend the buy grid to keep one level beyond the
-            # target crossing and compensate for the sell positions already
-            # hedging the basket (they add commission without net profit).
-            buy_depth = min(
-                max_grid_count,
-                max(placed_buy_depth, buy_count, buy_base + 1, buy_base + sell_count),
-            )
-            sell_depth = max(1, placed_sell_depth)
-        elif sell_count > buy_count:
-            sell_depth = min(
-                max_grid_count,
-                max(placed_sell_depth, sell_count, sell_base + 1, sell_base + buy_count),
-            )
-            buy_depth = max(1, placed_buy_depth)
-        else:
-            buy_depth = min(max_grid_count, max(placed_buy_depth, buy_count, buy_base + 1))
-            sell_depth = min(max_grid_count, max(placed_sell_depth, sell_count, sell_base + 1))
-        return (max(1, buy_depth), max(1, sell_depth))
+        # Grow both directions symmetrically: whenever a pending position is
+        # added in one direction, the opposite direction is extended too, so the
+        # basket can hedge and reverse no matter which way price moves.
+        depth = min(
+            max_grid_count,
+            max(
+                placed_buy_depth,
+                placed_sell_depth,
+                buy_count,
+                sell_count,
+                buy_base + 1,
+                sell_base + 1,
+            ),
+        )
+        return (max(1, depth), max(1, depth))
 
     def _solve_needed_depth(
         self,

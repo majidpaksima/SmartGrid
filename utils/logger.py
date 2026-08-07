@@ -44,30 +44,36 @@ class Logger:
                 parts.append(f"{k}={v}")
         return " | ".join(parts)
 
-    def info(self, message: str = "", **fields):
+    def _compose(self, message: str, fields: dict) -> str:
         msg = self._format(**fields) if fields else message
+        if fields and message:
+            msg = f"{message} | {msg}"
+        return msg
+
+    def info(self, message: str = "", **fields):
+        msg = self._compose(message, fields)
         self.logger.info(msg)
         if Logger._console_enabled:
             print(f"[INFO] {msg}")
 
     def warning(self, message: str = "", **fields):
-        msg = self._format(**fields) if fields else message
+        msg = self._compose(message, fields)
         self.logger.warning(msg)
         if Logger._console_enabled:
             print(f"[WARN] {msg}")
 
     def error(self, message: str = "", **fields):
-        msg = self._format(**fields) if fields else message
+        msg = self._compose(message, fields)
         self.logger.error(msg)
         if Logger._console_enabled:
             print(f"[ERROR] {msg}")
 
     def debug(self, message: str = "", **fields):
-        msg = self._format(**fields) if fields else message
+        msg = self._compose(message, fields)
         self.logger.debug(msg)
 
     def critical(self, message: str = "", **fields):
-        msg = self._format(**fields) if fields else message
+        msg = self._compose(message, fields)
         self.logger.critical(msg)
         if Logger._console_enabled:
             print(f"[CRITICAL] {msg}")
